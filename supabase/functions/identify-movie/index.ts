@@ -10,6 +10,10 @@ interface YouTubeMetadata {
   description: string;
   thumbnail: string;
   channelTitle: string;
+  publishedAt: string;
+  captionsAvailable: boolean;
+  captionsText: string;
+  commentKeywords: string[];
 }
 
 interface MovieResult {
@@ -39,7 +43,64 @@ function extractVideoId(url: string): string | null {
 }
 
 async function getYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
-  // Using oEmbed API (no API key needed)
+  const YOUTUBE_API_KEY = Deno.env.get("YOUTUBE_API_KEY");
+  
+  if (!YOUTUBE_API_KEY) {
+    console.log("YouTube API key not found, falling back to oEmbed");
+    return getYouTubeMetadataFallback(videoId);
+  }
+
+  try {
+    // Fetch video details
+    const videoResponse = await fetch(
+      `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`
+    );
+    
+    if (!videoResponse.ok) {
+      console.error("YouTube API error:", await videoResponse.text());
+      return getYouTubeMetadataFallback(videoId);
+    }
+
+    const videoData = await videoResponse.json();
+    
+    if (!videoData.items || videoData.items.length === 0) {
+      throw new Error("Video not found");
+    }
+
+    const snippet = videoData.items[0].snippet;
+    
+    // Get highest resolution thumbnail
+    const thumbnails = snippet.thumbnails;
+    const thumbnail = thumbnails.maxres?.url || 
+                      thumbnails.high?.url || 
+                      thumbnails.medium?.url || 
+                      thumbnails.default?.url ||
+                      `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+
+    // Fetch captions availability
+    const { captionsAvailable, captionsText } = await fetchCaptions(videoId, YOUTUBE_API_KEY);
+
+    // Fetch comments and extract keywords
+    const commentKeywords = await fetchCommentKeywords(videoId, YOUTUBE_API_KEY);
+
+    return {
+      title: snippet.title || "",
+      description: snippet.description || "",
+      thumbnail,
+      channelTitle: snippet.channelTitle || "",
+      publishedAt: snippet.publishedAt || "",
+      captionsAvailable,
+      captionsText,
+      commentKeywords,
+    };
+  } catch (error) {
+    console.error("YouTube API error:", error);
+    return getYouTubeMetadataFallback(videoId);
+  }
+}
+
+async function getYouTubeMetadataFallback(videoId: string): Promise<YouTubeMetadata> {
+  // Using oEmbed API as fallback (no API key needed)
   const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
   
   try {
@@ -50,40 +111,192 @@ async function getYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
     
     return {
       title: data.title || "",
-      description: "",  // oEmbed doesn't provide description
+      description: "",
       thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
       channelTitle: data.author_name || "",
+      publishedAt: "",
+      captionsAvailable: false,
+      captionsText: "",
+      commentKeywords: [],
     };
   } catch (error) {
     console.error("oEmbed error:", error);
-    // Fallback with just the thumbnail
     return {
       title: "",
       description: "",
       thumbnail: `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`,
       channelTitle: "",
+      publishedAt: "",
+      captionsAvailable: false,
+      captionsText: "",
+      commentKeywords: [],
     };
   }
+}
+
+async function fetchCaptions(videoId: string, apiKey: string): Promise<{ captionsAvailable: boolean; captionsText: string }> {
+  try {
+    // Check for available captions
+    const captionsResponse = await fetch(
+      `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${apiKey}`
+    );
+
+    if (!captionsResponse.ok) {
+      console.log("Captions API returned error, likely disabled for this video");
+      return { captionsAvailable: false, captionsText: "" };
+    }
+
+    const captionsData = await captionsResponse.json();
+    
+    if (!captionsData.items || captionsData.items.length === 0) {
+      return { captionsAvailable: false, captionsText: "" };
+    }
+
+    // Captions exist but downloading requires OAuth, so we just note availability
+    // The YouTube Data API doesn't allow downloading captions with just an API key
+    // We would need OAuth to actually download caption content
+    const englishCaption = captionsData.items.find(
+      (item: any) => item.snippet.language === "en" || item.snippet.language?.startsWith("en")
+    );
+    
+    return { 
+      captionsAvailable: true, 
+      captionsText: englishCaption 
+        ? `[Captions available in ${captionsData.items.map((c: any) => c.snippet.language).join(", ")}]`
+        : `[Captions available in ${captionsData.items.map((c: any) => c.snippet.language).join(", ")}]`
+    };
+  } catch (error) {
+    console.error("Error fetching captions:", error);
+    return { captionsAvailable: false, captionsText: "" };
+  }
+}
+
+async function fetchCommentKeywords(videoId: string, apiKey: string): Promise<string[]> {
+  try {
+    // Fetch top comments
+    const commentsResponse = await fetch(
+      `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=${videoId}&maxResults=50&order=relevance&key=${apiKey}`
+    );
+
+    if (!commentsResponse.ok) {
+      console.log("Comments API returned error, likely disabled for this video");
+      return [];
+    }
+
+    const commentsData = await commentsResponse.json();
+    
+    if (!commentsData.items || commentsData.items.length === 0) {
+      return [];
+    }
+
+    // Extract all comment texts
+    const commentTexts = commentsData.items.map(
+      (item: any) => item.snippet.topLevelComment.snippet.textDisplay
+    );
+
+    // Extract keywords from comments
+    const keywords = extractKeywordsFromComments(commentTexts);
+    
+    return keywords;
+  } catch (error) {
+    console.error("Error fetching comments:", error);
+    return [];
+  }
+}
+
+function extractKeywordsFromComments(comments: string[]): string[] {
+  const allText = comments.join(" ").toLowerCase();
+  
+  // Common movie-related terms to look for
+  const moviePatterns = [
+    /(?:this is from|this movie is|the movie|from the film|scene from)\s+["']?([^"'\n.!?]+)["']?/gi,
+    /["']([^"']+)["']\s+(?:movie|film)/gi,
+    /(?:love this scene|best scene|favorite scene|iconic scene)/gi,
+  ];
+  
+  const keywords: Set<string> = new Set();
+  
+  // Look for movie mentions
+  for (const pattern of moviePatterns) {
+    const matches = allText.matchAll(pattern);
+    for (const match of matches) {
+      if (match[1]) {
+        const cleaned = match[1].trim().slice(0, 50);
+        if (cleaned.length > 2) {
+          keywords.add(cleaned);
+        }
+      }
+    }
+  }
+
+  // Extract frequent capitalized phrases (potential movie titles)
+  const capitalizedPattern = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/g;
+  const fullText = comments.join(" ");
+  const capitalizedMatches = fullText.matchAll(capitalizedPattern);
+  const phraseCount = new Map<string, number>();
+  
+  for (const match of capitalizedMatches) {
+    const phrase = match[1];
+    // Filter common words
+    const commonWords = ["The", "This", "That", "What", "When", "Where", "How", "Why", "I", "You", "He", "She", "It", "We", "They", "And", "But", "Or"];
+    if (phrase.length > 3 && !commonWords.includes(phrase)) {
+      phraseCount.set(phrase, (phraseCount.get(phrase) || 0) + 1);
+    }
+  }
+  
+  // Add frequently mentioned phrases
+  for (const [phrase, count] of phraseCount) {
+    if (count >= 2) {
+      keywords.add(phrase.toLowerCase());
+    }
+  }
+
+  return Array.from(keywords).slice(0, 10);
 }
 
 async function identifyMovieWithAI(metadata: YouTubeMetadata): Promise<{ movieTitle: string; reasoning: string }> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
+  const contextParts: string[] = [];
+  
+  contextParts.push(`Video Title: ${metadata.title}`);
+  contextParts.push(`Channel: ${metadata.channelTitle}`);
+  
+  if (metadata.publishedAt) {
+    contextParts.push(`Published: ${metadata.publishedAt}`);
+  }
+  
+  if (metadata.description) {
+    // Truncate description if too long
+    const truncatedDesc = metadata.description.slice(0, 1000);
+    contextParts.push(`Description: ${truncatedDesc}`);
+  }
+  
+  contextParts.push(`Thumbnail URL: ${metadata.thumbnail}`);
+  
+  if (metadata.captionsAvailable) {
+    contextParts.push(`Captions: ${metadata.captionsText}`);
+  }
+  
+  if (metadata.commentKeywords.length > 0) {
+    contextParts.push(`Keywords from comments: ${metadata.commentKeywords.join(", ")}`);
+  }
+
   const prompt = `You are a movie identification expert. Based on the following video metadata from YouTube, identify the most likely movie being shown in this clip.
 
-Video Title: ${metadata.title}
-Channel: ${metadata.channelTitle}
-Thumbnail URL: ${metadata.thumbnail}
+${contextParts.join("\n")}
 
-Analyze the video title, channel name, and any contextual clues to determine which movie this clip is from. Consider:
-- Common patterns like "Movie Name - Scene Name" or "Movie (Year) - Clip"
+Analyze all available information to determine which movie this clip is from. Consider:
+- The video title often contains the movie name
 - Channel names that might indicate official movie channels
-- Keywords that suggest specific movies
+- Keywords from the description and comments
+- Publication date may hint at the movie's era
+- Comment keywords often mention the movie name directly
 
 Respond with a JSON object containing:
 1. "movieTitle": The exact movie title (just the title, no year)
-2. "reasoning": A brief explanation (1-2 sentences) of why you identified this movie
+2. "reasoning": A brief explanation (2-3 sentences) of why you identified this movie, citing the specific evidence from the metadata
 
 Only respond with valid JSON, no additional text.`;
 
@@ -220,11 +433,16 @@ serve(async (req) => {
 
     console.log("Processing video:", videoId);
 
-    // Get YouTube metadata
+    // Get YouTube metadata using YouTube Data API v3
     const metadata = await getYouTubeMetadata(videoId);
-    console.log("Metadata:", metadata);
+    console.log("Metadata fetched:", {
+      title: metadata.title,
+      channel: metadata.channelTitle,
+      captionsAvailable: metadata.captionsAvailable,
+      commentKeywords: metadata.commentKeywords.length,
+    });
 
-    // Use AI to identify the movie
+    // Use AI to identify the movie with enriched metadata
     const aiResult = await identifyMovieWithAI(metadata);
     console.log("AI identified:", aiResult.movieTitle);
 
