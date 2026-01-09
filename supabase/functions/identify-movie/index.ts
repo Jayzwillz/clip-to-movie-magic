@@ -29,6 +29,27 @@ interface MovieResult {
   aiReasoning: string;
 }
 
+interface MovieMatch {
+  movie: MovieResult;
+  confidence: number;
+  matchReasons: string[];
+}
+
+interface StreamingProvider {
+  name: string;
+  logo: string;
+  link: string;
+  type: "subscription" | "rent" | "buy";
+}
+
+interface SimilarMovie {
+  id: number;
+  title: string;
+  poster: string;
+  year: string;
+  genres: string[];
+}
+
 function extractVideoId(url: string): string | null {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/)([^&\n?#]+)/,
@@ -51,7 +72,6 @@ async function getYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
   }
 
   try {
-    // Fetch video details
     const videoResponse = await fetch(
       `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${videoId}&key=${YOUTUBE_API_KEY}`
     );
@@ -69,7 +89,6 @@ async function getYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
 
     const snippet = videoData.items[0].snippet;
     
-    // Get highest resolution thumbnail
     const thumbnails = snippet.thumbnails;
     const thumbnail = thumbnails.maxres?.url || 
                       thumbnails.high?.url || 
@@ -77,10 +96,7 @@ async function getYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
                       thumbnails.default?.url ||
                       `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
 
-    // Fetch captions availability
     const { captionsAvailable, captionsText } = await fetchCaptions(videoId, YOUTUBE_API_KEY);
-
-    // Fetch comments and extract keywords
     const commentKeywords = await fetchCommentKeywords(videoId, YOUTUBE_API_KEY);
 
     return {
@@ -100,7 +116,6 @@ async function getYouTubeMetadata(videoId: string): Promise<YouTubeMetadata> {
 }
 
 async function getYouTubeMetadataFallback(videoId: string): Promise<YouTubeMetadata> {
-  // Using oEmbed API as fallback (no API key needed)
   const oembedUrl = `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`;
   
   try {
@@ -136,13 +151,11 @@ async function getYouTubeMetadataFallback(videoId: string): Promise<YouTubeMetad
 
 async function fetchCaptions(videoId: string, apiKey: string): Promise<{ captionsAvailable: boolean; captionsText: string }> {
   try {
-    // Check for available captions
     const captionsResponse = await fetch(
       `https://www.googleapis.com/youtube/v3/captions?part=snippet&videoId=${videoId}&key=${apiKey}`
     );
 
     if (!captionsResponse.ok) {
-      console.log("Captions API returned error, likely disabled for this video");
       return { captionsAvailable: false, captionsText: "" };
     }
 
@@ -152,18 +165,9 @@ async function fetchCaptions(videoId: string, apiKey: string): Promise<{ caption
       return { captionsAvailable: false, captionsText: "" };
     }
 
-    // Captions exist but downloading requires OAuth, so we just note availability
-    // The YouTube Data API doesn't allow downloading captions with just an API key
-    // We would need OAuth to actually download caption content
-    const englishCaption = captionsData.items.find(
-      (item: any) => item.snippet.language === "en" || item.snippet.language?.startsWith("en")
-    );
-    
     return { 
       captionsAvailable: true, 
-      captionsText: englishCaption 
-        ? `[Captions available in ${captionsData.items.map((c: any) => c.snippet.language).join(", ")}]`
-        : `[Captions available in ${captionsData.items.map((c: any) => c.snippet.language).join(", ")}]`
+      captionsText: `[Captions available in ${captionsData.items.map((c: any) => c.snippet.language).join(", ")}]`
     };
   } catch (error) {
     console.error("Error fetching captions:", error);
@@ -173,13 +177,11 @@ async function fetchCaptions(videoId: string, apiKey: string): Promise<{ caption
 
 async function fetchCommentKeywords(videoId: string, apiKey: string): Promise<string[]> {
   try {
-    // Fetch top comments
     const commentsResponse = await fetch(
       `https://www.googleapis.com/youtube/v3/commentThreads?part=snippet&videoId=${videoId}&maxResults=50&order=relevance&key=${apiKey}`
     );
 
     if (!commentsResponse.ok) {
-      console.log("Comments API returned error, likely disabled for this video");
       return [];
     }
 
@@ -189,15 +191,11 @@ async function fetchCommentKeywords(videoId: string, apiKey: string): Promise<st
       return [];
     }
 
-    // Extract all comment texts
     const commentTexts = commentsData.items.map(
       (item: any) => item.snippet.topLevelComment.snippet.textDisplay
     );
 
-    // Extract keywords from comments
-    const keywords = extractKeywordsFromComments(commentTexts);
-    
-    return keywords;
+    return extractKeywordsFromComments(commentTexts);
   } catch (error) {
     console.error("Error fetching comments:", error);
     return [];
@@ -207,16 +205,13 @@ async function fetchCommentKeywords(videoId: string, apiKey: string): Promise<st
 function extractKeywordsFromComments(comments: string[]): string[] {
   const allText = comments.join(" ").toLowerCase();
   
-  // Common movie-related terms to look for
   const moviePatterns = [
     /(?:this is from|this movie is|the movie|from the film|scene from)\s+["']?([^"'\n.!?]+)["']?/gi,
     /["']([^"']+)["']\s+(?:movie|film)/gi,
-    /(?:love this scene|best scene|favorite scene|iconic scene)/gi,
   ];
   
   const keywords: Set<string> = new Set();
   
-  // Look for movie mentions
   for (const pattern of moviePatterns) {
     const matches = allText.matchAll(pattern);
     for (const match of matches) {
@@ -229,7 +224,6 @@ function extractKeywordsFromComments(comments: string[]): string[] {
     }
   }
 
-  // Extract frequent capitalized phrases (potential movie titles)
   const capitalizedPattern = /\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b/g;
   const fullText = comments.join(" ");
   const capitalizedMatches = fullText.matchAll(capitalizedPattern);
@@ -237,14 +231,12 @@ function extractKeywordsFromComments(comments: string[]): string[] {
   
   for (const match of capitalizedMatches) {
     const phrase = match[1];
-    // Filter common words
     const commonWords = ["The", "This", "That", "What", "When", "Where", "How", "Why", "I", "You", "He", "She", "It", "We", "They", "And", "But", "Or"];
     if (phrase.length > 3 && !commonWords.includes(phrase)) {
       phraseCount.set(phrase, (phraseCount.get(phrase) || 0) + 1);
     }
   }
   
-  // Add frequently mentioned phrases
   for (const [phrase, count] of phraseCount) {
     if (count >= 2) {
       keywords.add(phrase.toLowerCase());
@@ -254,7 +246,8 @@ function extractKeywordsFromComments(comments: string[]): string[] {
   return Array.from(keywords).slice(0, 10);
 }
 
-async function identifyMovieWithAI(metadata: YouTubeMetadata): Promise<{ movieTitle: string; reasoning: string }> {
+// Enhanced AI identification to return top 3 matches with confidence and reasons
+async function identifyMoviesWithAI(metadata: YouTubeMetadata): Promise<{ matches: Array<{ movieTitle: string; confidence: number; reasons: string[] }>; detailedReasoning: string }> {
   const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
   if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY is not configured");
 
@@ -268,7 +261,6 @@ async function identifyMovieWithAI(metadata: YouTubeMetadata): Promise<{ movieTi
   }
   
   if (metadata.description) {
-    // Truncate description if too long
     const truncatedDesc = metadata.description.slice(0, 1000);
     contextParts.push(`Description: ${truncatedDesc}`);
   }
@@ -283,11 +275,11 @@ async function identifyMovieWithAI(metadata: YouTubeMetadata): Promise<{ movieTi
     contextParts.push(`Keywords from comments: ${metadata.commentKeywords.join(", ")}`);
   }
 
-  const prompt = `You are a movie identification expert. Based on the following video metadata from YouTube, identify the most likely movie being shown in this clip.
+  const prompt = `You are a movie identification expert. Based on the following video metadata from YouTube, identify the TOP 3 most likely movies this clip could be from, ranked by confidence.
 
 ${contextParts.join("\n")}
 
-Analyze all available information to determine which movie this clip is from. Consider:
+Analyze all available information carefully. Consider:
 - The video title often contains the movie name
 - Channel names that might indicate official movie channels
 - Keywords from the description and comments
@@ -295,9 +287,13 @@ Analyze all available information to determine which movie this clip is from. Co
 - Comment keywords often mention the movie name directly
 
 Respond with a JSON object containing:
-1. "movieTitle": The exact movie title (just the title, no year)
-2. "reasoning": A brief explanation (2-3 sentences) of why you identified this movie, citing the specific evidence from the metadata
+1. "matches": An array of exactly 3 objects, each with:
+   - "movieTitle": The exact movie title (just the title, no year)
+   - "confidence": A percentage (integer 1-100) of how confident you are. The sum should be close to 100.
+   - "reasons": An array of 2-4 short strings explaining why this movie matches (e.g., "Title mentions 'The Flash'", "Comments reference 'Barry Allen'", "Channel is official Warner Bros")
+2. "detailedReasoning": A human-readable paragraph (3-4 sentences) explaining your analysis process and key evidence
 
+The first match should be your best guess with highest confidence.
 Only respond with valid JSON, no additional text.`;
 
   const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
@@ -333,7 +329,6 @@ Only respond with valid JSON, no additional text.`;
   
   if (!content) throw new Error("No response from AI");
   
-  // Parse JSON from response (handle potential markdown code blocks)
   let jsonStr = content.trim();
   if (jsonStr.startsWith("```")) {
     jsonStr = jsonStr.replace(/```json?\n?/g, "").replace(/```/g, "").trim();
@@ -341,8 +336,8 @@ Only respond with valid JSON, no additional text.`;
   
   const result = JSON.parse(jsonStr);
   return {
-    movieTitle: result.movieTitle,
-    reasoning: result.reasoning,
+    matches: result.matches,
+    detailedReasoning: result.detailedReasoning,
   };
 }
 
@@ -350,7 +345,6 @@ async function getMovieFromTMDB(movieTitle: string): Promise<MovieResult | null>
   const TMDB_API_KEY = Deno.env.get("TMDB_API_KEY");
   if (!TMDB_API_KEY) throw new Error("TMDB_API_KEY is not configured");
 
-  // Search for the movie
   const searchUrl = `https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&query=${encodeURIComponent(movieTitle)}`;
   const searchResponse = await fetch(searchUrl);
   
@@ -367,7 +361,6 @@ async function getMovieFromTMDB(movieTitle: string): Promise<MovieResult | null>
 
   const movie = searchData.results[0];
   
-  // Get detailed movie info
   const detailsUrl = `https://api.themoviedb.org/3/movie/${movie.id}?api_key=${TMDB_API_KEY}&append_to_response=videos`;
   const detailsResponse = await fetch(detailsUrl);
   
@@ -378,7 +371,6 @@ async function getMovieFromTMDB(movieTitle: string): Promise<MovieResult | null>
 
   const details = await detailsResponse.json();
   
-  // Find official trailer
   let trailer: string | null = null;
   if (details.videos?.results) {
     const officialTrailer = details.videos.results.find(
@@ -407,6 +399,92 @@ async function getMovieFromTMDB(movieTitle: string): Promise<MovieResult | null>
   };
 }
 
+// Fetch streaming providers from TMDB
+async function getStreamingProviders(tmdbId: number): Promise<StreamingProvider[]> {
+  const TMDB_API_KEY = Deno.env.get("TMDB_API_KEY");
+  if (!TMDB_API_KEY) return [];
+
+  try {
+    const response = await fetch(
+      `https://api.themoviedb.org/3/movie/${tmdbId}/watch/providers?api_key=${TMDB_API_KEY}`
+    );
+    
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    
+    // Try to get US providers, fallback to first available region
+    const regionData = data.results?.US || Object.values(data.results || {})[0] as any;
+    
+    if (!regionData) return [];
+
+    const providers: StreamingProvider[] = [];
+    const seen = new Set<string>();
+
+    // Add subscription (flatrate) providers
+    if (regionData.flatrate) {
+      for (const p of regionData.flatrate.slice(0, 4)) {
+        if (!seen.has(p.provider_name)) {
+          seen.add(p.provider_name);
+          providers.push({
+            name: p.provider_name,
+            logo: `https://image.tmdb.org/t/p/original${p.logo_path}`,
+            link: regionData.link || "",
+            type: "subscription",
+          });
+        }
+      }
+    }
+
+    // Add rent providers
+    if (regionData.rent) {
+      for (const p of regionData.rent.slice(0, 2)) {
+        if (!seen.has(p.provider_name)) {
+          seen.add(p.provider_name);
+          providers.push({
+            name: p.provider_name,
+            logo: `https://image.tmdb.org/t/p/original${p.logo_path}`,
+            link: regionData.link || "",
+            type: "rent",
+          });
+        }
+      }
+    }
+
+    return providers.slice(0, 6);
+  } catch (error) {
+    console.error("Error fetching streaming providers:", error);
+    return [];
+  }
+}
+
+// Fetch similar movies from TMDB
+async function getSimilarMovies(tmdbId: number): Promise<SimilarMovie[]> {
+  const TMDB_API_KEY = Deno.env.get("TMDB_API_KEY");
+  if (!TMDB_API_KEY) return [];
+
+  try {
+    const response = await fetch(
+      `https://api.themoviedb.org/3/movie/${tmdbId}/similar?api_key=${TMDB_API_KEY}&page=1`
+    );
+    
+    if (!response.ok) return [];
+    
+    const data = await response.json();
+    
+    return (data.results || []).slice(0, 6).map((m: any) => ({
+      id: m.id,
+      title: m.title,
+      poster: m.poster_path ? `https://image.tmdb.org/t/p/w200${m.poster_path}` : "",
+      year: m.release_date ? m.release_date.split("-")[0] : "Unknown",
+      genres: [], // Genre info not included in similar endpoint
+    }));
+  } catch (error) {
+    console.error("Error fetching similar movies:", error);
+    return [];
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -422,7 +500,6 @@ serve(async (req) => {
       );
     }
 
-    // Extract video ID
     const videoId = extractVideoId(videoUrl);
     if (!videoId) {
       return new Response(
@@ -433,7 +510,7 @@ serve(async (req) => {
 
     console.log("Processing video:", videoId);
 
-    // Get YouTube metadata using YouTube Data API v3
+    // Get YouTube metadata
     const metadata = await getYouTubeMetadata(videoId);
     console.log("Metadata fetched:", {
       title: metadata.title,
@@ -442,27 +519,53 @@ serve(async (req) => {
       commentKeywords: metadata.commentKeywords.length,
     });
 
-    // Use AI to identify the movie with enriched metadata
-    const aiResult = await identifyMovieWithAI(metadata);
-    console.log("AI identified:", aiResult.movieTitle);
+    // Use AI to identify top 3 movies with confidence
+    const aiResult = await identifyMoviesWithAI(metadata);
+    console.log("AI identified matches:", aiResult.matches.map(m => m.movieTitle));
 
-    // Get movie details from TMDB
-    const movieData = await getMovieFromTMDB(aiResult.movieTitle);
+    // Get TMDB data for all matches in parallel
+    const moviePromises = aiResult.matches.map(async (match) => {
+      const movieData = await getMovieFromTMDB(match.movieTitle);
+      if (!movieData) return null;
+      
+      movieData.aiReasoning = aiResult.detailedReasoning;
+      
+      return {
+        movie: movieData,
+        confidence: match.confidence,
+        matchReasons: match.reasons,
+      } as MovieMatch;
+    });
+
+    const allMatches = (await Promise.all(moviePromises)).filter((m): m is MovieMatch => m !== null);
     
-    if (!movieData) {
+    if (allMatches.length === 0) {
       return new Response(
         JSON.stringify({ 
-          error: "Could not find movie information. The AI suggested: " + aiResult.movieTitle,
-          aiReasoning: aiResult.reasoning 
+          error: "Could not find movie information. The AI suggested: " + aiResult.matches[0]?.movieTitle,
+          aiReasoning: aiResult.detailedReasoning 
         }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    movieData.aiReasoning = aiResult.reasoning;
+    const bestMatch = allMatches[0];
+
+    // Fetch streaming providers and similar movies for the best match
+    const [streamingProviders, similarMovies] = await Promise.all([
+      getStreamingProviders(bestMatch.movie.tmdbId),
+      getSimilarMovies(bestMatch.movie.tmdbId),
+    ]);
 
     return new Response(
-      JSON.stringify({ movie: movieData, videoThumbnail: metadata.thumbnail }),
+      JSON.stringify({ 
+        movie: bestMatch.movie, 
+        videoThumbnail: metadata.thumbnail,
+        matches: allMatches,
+        streamingProviders,
+        similarMovies,
+        detailedReasoning: aiResult.detailedReasoning,
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
