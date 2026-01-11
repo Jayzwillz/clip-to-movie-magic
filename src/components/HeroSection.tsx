@@ -17,9 +17,13 @@ export function HeroSection() {
         className="inline-flex items-center gap-3 mb-6"
       >
         <div className="relative">
-          <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-gold-glow flex items-center justify-center glow-gold">
-            <Film className="w-7 h-7 text-primary-foreground" />
-          </div>
+          <motion.div
+            className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-gold-glow flex items-center justify-center glow-gold overflow-hidden"
+            animate={{ scale: [1, 1.08, 1] }}
+            transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+          >
+            <img src="/images/clipit-logo.png" alt="Clipit Logo" className="w-10 h-10 object-contain" />
+          </motion.div>
           <motion.div
             animate={{ rotate: 360 }}
             transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
