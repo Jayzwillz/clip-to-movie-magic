@@ -7,10 +7,34 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+
+# Node modules
+node_modules/
+
+# Build output
+dist/
 node_modules
+dist-ssr/
+
+# Env files
+.env
+.env.*
+
+# Bun
+bun.lockb
+
+# Supabase generated
+.supabase/
+
+# Coverage
+coverage/
 dist
 dist-ssr
 *.local
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Editor directories and files
 .vscode/*
